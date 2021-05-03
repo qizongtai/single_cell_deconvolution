@@ -1,4 +1,4 @@
-# survival_analysis and hazard ratio measurement 
+# survival analysis and hazard ratio measurement 
 This Rmarkdown file is used for paper "Single-Cell Deconvolution of Head and Neck Squamous Cell Carcinoma" published at Cancers (https://www.mdpi.com/2072-6694/13/6/1230)  
 This script is mainly used for survival anlaysis of gene expression and deconvoluted cell-type proporations in head and neck patients in TCGA.   
 A brief introduction can found at the Method section: Survival analysis and hazard ratio measurement  
