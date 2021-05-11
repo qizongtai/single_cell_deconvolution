@@ -1,0 +1,327 @@
+---
+title: "gene_survival_plot_for_head_and_neck_cancer"
+author: "zongtai"
+date: "4/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+wd <- "/scratch/splab/zqi/deconvolution/11_202008_TCGA_HN_cibersort_subtype_group_and_high_resolution_analysis_Treg_selected_annotated"
+knitr::opts_knit$set(root.dir = wd)
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tableone)
+library(readxl)
+library(survival)
+library(survminer)
+options(stringsAsFactors = FALSE)
+
+```
+
+##1.1 read cell proportion and clinical data; read pEMT scores from angela;
+```{r}
+####---input file from other directories---####
+input.path1 <- "/scratch/splab/zqi/deconvolution/4_202004_TCGA_HN_music_subtype_survival/1_data/clinical/"
+input.path2 <- "/scratch/splab/zqi/deconvolution/5_202004_TCGA_HN_cibersort/3_output/cibersort_output_sc_subtype_ref/"
+
+all.tumor.cell <- read.table(paste0(input.path2, "CIBERSORTx_Job9_Adjusted_allcaseid.txt"), header = T, sep = "\t", stringsAsFactors = F)
+all.tumor.clinical <- read.table(paste0(input.path1, "all_tumor_clinical.tsv"), header = T, sep = "\t", na.strings = "--", stringsAsFactors = F)
+all.tumor.clinical <- all.tumor.clinical[!duplicated(all.tumor.clinical[c("submitter_id")]),]
+#angula_clinical <- read.table(paste0(input.path1, "/clinical_TCGA.csv"), header = T, sep = "\t", na.strings = "--", stringsAsFactors = F)
+all.tumor.x <- merge(x = all.tumor.cell, y = all.tumor.clinical, by.x = "caseid", by.y = "submitter_id", all.x = T)
+
+####---data from angela----####
+#angela.clinical <- read.table(paste0(input.path1, "angela_TCGA_clinical.csv"), header = T, sep = ",", na.strings = "--", stringsAsFactors = F)
+angela.clinical_pEMT1 <- read.table(paste0(input.path1, "angela_TCGA_clinical_pEMT.csv"), header = T, sep = ",", na.strings = "--", stringsAsFactors = F)
+#angela.clinical_pEMT2 <- read.table(paste0(input.path1, "angela_TCGA_clinical_pEMT.txt"), header = T, sep = "\t", na.strings = "--", stringsAsFactors = F)
+
+#pEMT1(csv) has one more column than pEMT2(tsv) so use this one
+#select the columns:bcr_patient_barcode;tobacco_smoking_history_indicator;Final_HPV_Status;site; pEMT
+#table(angela.clinical_pEMT1$site)
+#Larynx Oral Cavity  Oropharynx 
+# 125         309          80 
+column <- angela.clinical_pEMT1[,c("bcr_patient_barcode","tobacco_smoking_history_indicator","Final_HPV_Status", "site", "pEMT")]
+all.tumor <- merge(x = all.tumor.x, y = column, by.x = "caseid", by.y = "bcr_patient_barcode", all.x = T)
+```
+
+##1.2 filter the data to exclunde HPV positive
+```{r}
+#####----filter1-----#####
+#remove Oropharynx(look at onenote for details)
+#column128:site_of_resection_or_biopsy
+#column133:tissue_or_organ_of_origin
+#there are 10 Oropharynx, NOS based on TCGA annotation but 80 based on Angela's annotation
+#run one of the below filters
+#option1: subset based on TCGA's annotation
+all.tumor <- subset(all.tumor, !(site_of_resection_or_biopsy %in% c("Oropharynx, NOS", "Posterior wall of oropharynx")))
+#option2: subset based on Angela's annotation
+#all.tumor <- subset(all.tumor, !(site %in% "Oropharynx"))
+
+#####----filter2-----#####
+#checking missing cases not in TCGA annotation from Angela and remove them, there are 4
+#missingcase <- subset(all.tumor.cell, !(caseid %in% angela.clinical_pEMT1$bcr_patient_barcode))
+#all.tumor <- subset(all.tumor, caseid %in% angela.clinical_pEMT1$bcr_patient_barcode)
+
+```
+
+##2.1 read in gene expresssion data
+```{r}
+##the master table is saved in RDS file; no need to run the below code again
+#all.tumor.gene <- readRDS(file="3_output/all_tumor_gene.rds")
+#--------------------------------------------------------------------------------------------
+#get the gene TPM from cibersortx input file
+input.path3 <- "/scratch/splab/zqi/deconvolution/5_202004_TCGA_HN_cibersort/3_output/cibersort_input_bulkRNA/"
+#input.path4 <- "/scratch/splab/zqi/deconvolution/5_202004_TCGA_HN_cibersort/3_output/cibersort_output_sc_maintype_ref/"
+input.path4 <- "/scratch/splab/zqi/deconvolution/1_202001_TCGA_HN_music/3_result/1_yating_20200225_FPKM/"
+all.tumor.gene.TPM <- read.table(paste0(input.path3, "alltumor_genename_TPM.txt"), header = T, sep = "\t", stringsAsFactors = F)
+#alltumor_id <- read.table(paste0(input.path4, "all_tumor_filename_caseid.txt"), header=F, sep="\t", stringsAsFactors = F)
+alltumor_id <- read.table(paste0(input.path4, "all_tumor_filename_filename2_caseid.txt"), header=F, sep="\t", stringsAsFactors = F)
+colnames(alltumor_id) <- c("fileid","sampleid","caseid")
+
+#Method1: t
+all <- as.data.frame(t(all.tumor.gene.TPM))
+colnames(all) <- as.character(unlist(droplevels(all[1,])))
+all <- all[-1,]
+row.names(all) <- str_remove(row.names(all),"^X")
+row.names(all) <- str_replace_all(row.names(all),"\\.","-")
+all.gene <- data.frame(lapply(all, function(x) as.numeric(as.character(x))))
+#all.gene$casecode <- row.names(all)
+row.names(all.gene) <- row.names(all)
+
+# #Method2: transpose from data.table package (package link)
+# library(data.table)
+# master.meta2 <- transpose(all.tumor.gene.TPM)
+# dimnames(master.meta2) <- list(names(master), row.names(master))
+
+#make gene master table with expression data
+all.gene.caseid <- merge(x=all.gene, y=alltumor_id, by.x="row.names", by.y="fileid")
+```
+
+##2.2 filter the data to exclude the HPV positive; refer to 1.2;
+```{r}
+all.gene.caseid <- all.gene.caseid[all.gene.caseid$caseid %in% all.tumor$caseid,]
+
+```
+
+##2.3 merge it with clinical data to make a master table
+```{r}
+##############################################################
+#=======================important note=======================#
+##############################################################
+# all.tumor and all.gene.id have 545 rows
+# after mereging, it should have 545 rows 
+# but the case id in them has 45 duplicated values (this is 90 rows) 
+# after mereging, it has 545 + 90 = 635
+# to avoid over-amplifing the duplicated values
+# order the caseid and then cbind them 
+# this will still keep the original duplciated values
+
+# ####---old code uses "merge". should ignore this---####
+# #---merge gene with all other clinical data
+# all.tumor.gene <- merge(x = all.tumor, y = all.gene.caseid, by.x = "caseid", by.y = "caseid", all.x = T)
+# hist(all.tumor.gene$pEMT, breaks = 100, xlim=c(-3,3), col = 'skyblue')
+# saveRDS(all.tumor.gene, file="3_output/all_tumor_gene.rds")
+
+####---new code: 1) first filter by caseid based on filter used in clinical data 
+####---order by caseid and rbind---###
+all.tumor.order <- all.tumor[order(all.tumor$caseid),]
+all.gene.caseid.order <- all.gene.caseid[order(all.gene.caseid$caseid),]
+#check the reodered the caseid
+head(all.tumor.order$caseid, n = 20)
+head(all.gene.caseid.order$caseid, n = 20)
+tail(all.tumor.order$caseid, n = 20)
+tail(all.gene.caseid.order$caseid, n = 20)
+all.tumor.gene <- cbind(all.tumor.order, all.gene.caseid.order)
+# #Note: there are two caseid in the column name, 
+# fix1:add prefix when cbind to make them different
+# all.tumor.gene <- cbind(a=all.tumor.order, b=all.gene.caseid.order)
+#fix2: use grep to get index and rename
+colnames(all.tumor.gene)[grep("caseid", colnames(all.tumor.gene))[2]] <- "caseid.2"
+#saveRDS(all.tumor.gene, file="3_output/all_tumor_gene.rds")
+
+```
+
+#3 read in genes for survival analysis and categorize nummeric gene expression into discrete groups 
+```{r}
+####---extract the genes from the master talbe---####
+#read in genes for survival analysis
+#gene <- read_excel(path="1_data/scc47_and_jhu6_dw_geneonly.xlsx", col_names="gene_name", sheet=1)
+gene <- read_excel(path="1_data/scc47_and_jhu6_up_geneonly.xlsx", col_names="gene_name", sheet=1)
+gene <- as.character(gene$gene_name)
+#select the genes from the master table
+gene.df <- all.tumor.gene[,colnames(all.tumor.gene) %in% gene]
+if ( ncol(gene.df) != length(gene) ) {
+  unfound <- gene[!(gene %in% colnames(gene.df))]
+  for (i in unfound) { cat(paste(i, "is not found. \n")) }
+} else {
+  print("all genes are found in the master table")
+}
+
+####---categorize continues nummeric gene experssion into discrete groups####
+# #method1: from Angla
+# all.tumor.gene <- all.tumor.gene %>% mutate_at(
+#   funs(quant = as.integer(cut(., quantile(., probs=seq(0,1, length=3), na.rm = T), include.lowest = TRUE))), 
+#   .vars = colnames(all))
+
+#method2:
+class_num_vector <- function(data, class, na.rm=T) {
+  cut_points <- quantile(data, probs=seq(0,1, length=(class+1)), na.rm = na.rm)
+  #cut_point is a named vector as below
+  #       0%        50%       100% 
+  #1.739194  90.300220 612.678600
+  ls <- list()
+  return(as.integer(cut(data, breaks = cut_points, include.lowest=T)))
+  #output from cut is a factor vector
+  #two Levels: (1.74,90.3] (90.3,613]
+  #as.integer() change a facotr vector to a numeric vector
+  #(1.74,90.3] becomes 1 ;(90.3,613] becomes 2
+}
+
+gene.df.class <- as.data.frame(mapply(class_num_vector, data=gene.df, class=2))
+
+```
+
+##4.1 calculate the survival statitcs by Kaplan–Meier model and compared the survival outcomes log-rank tests
+```{r}
+####---Calculating Surv based on vital status and days ot follow----####
+all.tumor.gene$survival_time <- all.tumor.gene$days_to_death
+all.tumor.gene$survival_time[is.na(all.tumor.gene$days_to_death)] <- all.tumor.gene$days_to_last_follow_up[is.na(all.tumor.gene$days_to_death)]
+
+all.tumor.gene$survival_time5 <- all.tumor.gene$survival_time
+all.tumor.gene$survival_time5[all.tumor.gene$survival_time > 1826.25] <- 1826.25
+
+all.tumor.gene$dead <- NA
+all.tumor.gene$dead[all.tumor.gene$vital_status == "Alive"] <- 0
+all.tumor.gene$dead[all.tumor.gene$vital_status == "Dead"] <- 1
+
+all.tumor.gene$dead5 <- all.tumor.gene$dead
+all.tumor.gene$dead5[all.tumor.gene$survival_time > 1826.25] <- 0
+
+all.tumor.gene$SurvObj1 <- with(all.tumor.gene, Surv(all.tumor.gene$survival_time, all.tumor.gene$dead == 1))
+all.tumor.gene$SurvObj <- with(all.tumor.gene, Surv(survival_time5, dead5 == 1))
+
+###comibine gene.df with the survival data
+survival.df <- all.tumor.gene[c("caseid",
+                                "survival_time",
+                                "survival_time5",
+                                "dead",
+                                "dead5",
+                                "SurvObj1",
+                                "SurvObj") ]
+df <- cbind(gene.df.class, survival.df)
+#table(df$gene)
+
+####---CREATING KM CURVES---####
+###KM Curves
+# code for running individually 
+# KM.ENSG00000008517 <- survfit(SurvObj ~ ENSG00000008517_quant, data = all.tumor.gene)
+# pairwise_survdiff(SurvObj ~ ENSG00000008517_quant, data = all.tumor.gene)
+# ?pairwise_survdiff
+# pairwise_survdiff(formula, data, p.adjust.method = "BH", na.action, rho = 0)
+# ?survfit
+# survfit(formula, ...)
+
+vec.pvalue <- numeric()
+#Need to use surv_fit not survfit. refer to Onenote; R formula
+for (i in colnames(gene.df.class)) {
+  f <- formula(paste0("SurvObj", " ~ ", i))
+  assign(paste0("KM.", i), surv_fit(f, data = df))
+  assign(paste0("diff.", i), pairwise_survdiff(f, data = df))
+  pvalue <- get(paste0("diff.", i))$p.value[1,1]
+  vec.pvalue[i] <- pvalue
+}
+df.pvalue <- as.data.frame(vec.pvalue)
+#output name based on the gene file  
+#write.table(df.pvalue, file="3_output/snai2_dw_survival_pvalue.txt", col.names = T, row.names = T, sep = "\t", quote = F)
+write.table(df.pvalue, file="3_output/snai2_up_survival_pvalue.txt", col.names = T, row.names = T, sep = "\t", quote = F)
+
+```
+
+##4.2 plot survival curve
+```{r}
+###Plotting KM curves
+splots <- list()
+count = 1
+for (i in colnames(gene.df.class)) {
+  splots[[count]] <- ggsurvplot(get(paste0("KM.", i)), data = df, 
+                            legend.labs = c("low","high"),
+                            linetype = "strata", size = 1.10, legend.title = i, tables.height = 0.333,
+                            pval = T, xlab = "Time (days)", censor = F
+  )
+  count = count + 1  
+}
+
+all <- arrange_ggsurvplots(splots, ncol = 5, nrow = as.integer((ncol(gene.df.class)/5)+1))
+part <- arrange_ggsurvplots(splots[1:6], ncol = 2, nrow = 3) 
+part
+
+pdf(file="3_output/snai2_dw_survival.pdf", height = 30, width = 16, useDingbats = FALSE)
+all
+dev.off()
+
+pdf(file="3_output/snai2_up_survival.pdf", height = 12, width = 16, useDingbats = FALSE)
+all
+dev.off()
+
+pdf(file="3_output/single_survival.pdf", height = 4, width = 4, useDingbats = FALSE)
+splots[[2]]
+dev.off()
+
+```
+
+##5 Hazard ratios (HRs) and corresponding 95% confidence intervals (CIs) for risk of disease progression and mortality associated with high and low percentage of cell types were estimated using the Cox proportional-hazards model. Multivariable Cox model was adjusted for tumor stage, race, smoking status, and age. 
+```{r}
+##Re-catrgorizing Race
+all.tumor$race_new <- all.tumor$race
+all.tumor$race_new[all.tumor$race %in% c("american indian or alaska native", "asian", "not reported")] <- "other"
+all.tumor$race_new[all.tumor$ethnicity %in% c("hispanic or latino")] <- "hispanic"
+
+all.tumor$smoking <- NA
+all.tumor$smoking[all.tumor$tobacco_smoking_history_indicator == 1] <- "Never"
+all.tumor$smoking[all.tumor$tobacco_smoking_history_indicator %in% c(2, 3, 4, 5)] <- "ever"
+#all.tumor$smoking[all.tumor$tobacco_smoking_history_indicator == 2] <- "Current"
+#all.tumor$smoking[all.tumor$tobacco_smoking_history_indicator %in% c(3, 4, 5)] <- "Former"
+#all.tumor$smoking[all.tumor$tobacco_smoking_history_indicator == 2] <- "Current"
+
+#TNFRSF4
+hr1 <- coxph(SurvObj ~  factor(ENSG00000186827_quant) 
+             + relevel(factor(tumor_stage), ref = "stage i") 
+             + relevel(factor(race_new), ref = "white")
+             + relevel(factor(smoking), ref="Never")
+             + age_at_index, data = all.tumor)
+#RELB
+hr2 <- coxph(SurvObj ~  factor(ENSG00000104856_quant) 
+             + relevel(factor(tumor_stage), ref = "stage i") 
+             + relevel(factor(race_new), ref = "white")
+             + relevel(factor(smoking), ref="Never")
+             + age_at_index, data = all.tumor)
+summary(hr1)
+summary(hr2)
+
+library(broom)
+mod0 <- broom::tidy(hr1, conf.int = TRUE)
+term <- HR <- lb <- ub <- p <- vector()
+for (i  in 1:12) {
+  term[i] = mod0$term[i]
+  HR[i] = exp(mod0$estimate[i])
+  lb[i] = exp(mod0$conf.low[i])
+  ub[i] = exp(mod0$conf.high[i])
+  p[i] = mod0$p.value[i]
+}
+outcome1 <- data.frame(term, HR, lb, ub, p)
+write.table(outcome1, file="3_output/CIBERSORTx_treg_TNFRSF4_quant_HR.txt", sep='\t', quote = F, col.names = T, row.names = T)
+
+mod0 <- broom::tidy(hr2, conf.int = TRUE)
+term <- HR <- lb <- ub <- p <- vector()
+for (i  in 1:12) {
+  term[i] = mod0$term[i]
+  HR[i] = exp(mod0$estimate[i])
+  lb[i] = exp(mod0$conf.low[i])
+  ub[i] = exp(mod0$conf.high[i])
+  p[i] = mod0$p.value[i]
+}
+outcome2 <- data.frame(term, HR, lb, ub, p)
+write.table(outcome2, file="3_output/CIBERSORTx_treg_RELB_quant_HR.txt", sep='\t', quote = F, col.names = T, row.names = T)
+
+```
+
