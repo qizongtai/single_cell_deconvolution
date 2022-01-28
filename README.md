@@ -10,3 +10,4 @@ A brief introduction can found at the Method section: Survival analysis and haza
 Patients were split at the median for each estimated cell type. The prognosis of each group of patients was examined by Kaplan–Meier survival, and log-rank tests compared the survival outcomes. Kaplan–Meier plots are presented for all the cell-type proportions, and the cell types with log-rank p-values less than 0.05 were defined as a prognostic cell type. Hazard ratios (HRs) and corresponding 95% confidence intervals (CIs) for risk of disease progression and mortality associated with high and low percentage of cell types were estimated using the Cox proportional-hazards model. Multivariable Cox model was adjusted for tumor stage, race, smoking status, and age. All statistical analyses were performed using R version 3.6.
 
 
+
